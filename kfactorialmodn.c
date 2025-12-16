@@ -5,11 +5,11 @@
 // -----------------------------
 // Simple functions to calculate k! mod n.
 // getkfactmodn1() - k,n < 2^64 (Slowest on x64)
-// Define macro KFACTORIALMODUSEMG to use the following functions.
-//    Require https://github.com/FastAsChuff/Fast-Modular-Exponentiation/blob/main/modpowu64.c
-//    and https://github.com/FastAsChuff/Fast-Modular-Inverse-Modulo-Powers-Of-2/blob/main/fastmodinvpow2fns.c
 // getkfactmodn6() - n < 2^64, k < 2^32, n must be odd and pre-computed array primes must contain all primes <= k in ascending 
 //    order. (Fastest on x64)
+// Define macro KFACTORIALMODUSEMG to use the following function.
+//    Requires https://github.com/FastAsChuff/Fast-Modular-Exponentiation/blob/main/modpowu64.c
+//    and https://github.com/FastAsChuff/Fast-Modular-Inverse-Modulo-Powers-Of-2/blob/main/fastmodinvpow2fns.c
 // getkfactmodn3() - k,n < 2^64, n must be odd. 
 // COPYRIGHT: Software is given as is without guarantee or warranty. It is offered free to use, modify, copy, or distribute
 // with conspicuous attribution for any purpose.
@@ -18,6 +18,7 @@
 #ifndef U128
   #define U128 unsigned __int128
 #endif
+
 
 #ifdef KFACTORIALMODUSEMG
 
@@ -42,7 +43,36 @@ uint64_t getkfactmodn3(uint64_t k, uint64_t n) {
   if (k & 0x1u) f1 = ((U128)k*f1) % n;
   return ((U128)f2*f1) % n;
 }
+#else
+uint32_t modpowu64b(uint32_t a, uint64_t e, uint32_t n) {
+  uint32_t res = 1;
+  uint32_t sq = a;
+  while (1) {
+    if (e & 1ULL) res = ((uint64_t)res * sq) % n;
+    e >>= 1;
+    if (e == 0) break;
+    sq = ((uint64_t)sq*sq) % n;
+  }
+  return res;
+}
 
+uint64_t modpowu64general(uint64_t a, uint64_t e, uint64_t n) {
+// Returns a^e mod n.
+  if (n < 2) return 0;
+  a %= n;
+  if (a < 2) return a;
+  if (n <= 0xffffffff) return modpowu64b(a % n, e, n);
+  uint64_t res = 1;
+  uint64_t sq = a;
+  while (1) {
+    res = ((e & 1ULL) ? ((U128)res * sq) % n : res);
+    e >>= 1;
+    if (e == 0) break;
+    sq = ((U128)sq*sq) % n;
+  }
+  return res;
+}
+#endif
 uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *primes) {
   // Assumes primes contains all primes <= k.
   // assert(n & 0x1u);
@@ -71,7 +101,11 @@ uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *pri
       if (primes[pix] > k) break;
       p = primes[pix];
     }
+#ifdef KFACTORIALMODUSEMG
     prodp = modpowu64(prodp, eiprev, n);
+#else
+    prodp = modpowu64general(prodp, eiprev, n);
+#endif
     res = ((U128)res * prodp) % n;
     if (pix >= numprimes) break;
     if (primes[pix] > k) break;
@@ -80,7 +114,6 @@ uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *pri
   }
   return res;
 }
-#endif
 
 uint64_t getkfactmodn1(uint64_t k, uint64_t n) {
   if (k >= n) return 0;
