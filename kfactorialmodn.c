@@ -6,11 +6,14 @@
 // Simple functions to calculate k! mod n.
 // getkfactmodn1() - k,n < 2^64 (Slowest on x64)
 // getkfactmodn6() - n < 2^64, k < 2^32, n must be odd and pre-computed array primes must contain all primes <= k in ascending 
-//    order. (Fastest on x64)
+//    order. Uses prime factorisation of k! method.
 // Define macro KFACTORIALMODUSEMG to use the following function.
 //    Requires https://github.com/FastAsChuff/Fast-Modular-Exponentiation/blob/main/modpowu64.c
 //    and https://github.com/FastAsChuff/Fast-Modular-Inverse-Modulo-Powers-Of-2/blob/main/fastmodinvpow2fns.c
-// getkfactmodn3() - k,n < 2^64, n must be odd. 
+// getkfactmodn3() - k,n < 2^64, n must be odd. Uses Montgomery modular arithmetic.
+// getkfactmodn25() - k,n < 2^64, n must be odd. Uses Montgomery modular arithmetic after factoring out all even integers.
+// getkfactmodn25() runtime on 3.4GHz i7-6700 approx. k/1000000000 secs.
+//
 // COPYRIGHT: Software is given as is without guarantee or warranty. It is offered free to use, modify, copy, or distribute
 // with conspicuous attribution for any purpose.
 //===============================================================================================================================
@@ -19,6 +22,18 @@
   #define U128 unsigned __int128
 #endif
 
+
+uint64_t getkfactmodn1(uint64_t k, uint64_t n) {
+  if (k >= n) return 0;
+  if (n >> 32) {
+    uint64_t f = 1;
+    for (uint64_t i=2; i<=k; i++) f = ((U128)f*i) % n;
+    return f;
+  } 
+  uint32_t f = 1;
+  for (uint32_t i=2; i<=k; i++) f = ((uint64_t)f*i) % n;
+  return f;
+}
 
 #ifdef KFACTORIALMODUSEMG
 
@@ -41,7 +56,62 @@ uint64_t getkfactmodn3(uint64_t k, uint64_t n) {
   uint64_t f1 = fromu64mg(fr1, n, ninv, twoto64modn);
   uint64_t f2 = fromu64mg(fr2, n, ninv, twoto64modn);
   if (k & 0x1u) f1 = ((U128)k*f1) % n;
-  return ((U128)f2*f1) % n;
+  return ((U128)f2*f1) % n;  
+}
+
+uint64_t getkfactmodn25(uint64_t k, uint64_t n) {
+  //assert(n & 0x1u);
+  if (k >= n) return 0u;
+  if (n == 1u) return 0u;
+  if (k < 2u) return 1u;
+  if (k == 2u) return 2u;
+  if (n == 3u) return k;
+  uint64_t twoto64modn = 0u;
+  uint64_t ninv = modinv64x(n);
+  uint64_t r = tou64mg(1u, n, &twoto64modn);
+  uint64_t res = r;
+  uint64_t sumoffloors = 0u;
+  uint64_t twopower = 2u;
+  for (uint64_t i=1u; twopower && (k>=twopower); i++) {
+    sumoffloors += k/twopower;
+    twopower *= 2u;
+  }
+  res = tou64mg(modpowu64(2u, sumoffloors, n), n, &twoto64modn);
+  twopower = 2u;  
+  uint64_t limit = ((U128)k + 1u)/2u;
+  uint64_t minustwor = tou64mg(n-2u, n, &twoto64modn);
+  uint64_t minusfourr = tou64mg(n-4u, n, &twoto64modn);
+  for (uint32_t j=1; twopower; j++) {
+    uint64_t factor1 = r;
+    uint64_t factor2 = r;
+    uint64_t limitnext = ((k/twopower) + 1u)/2u;
+    uint64_t twoim1r = tou64mg(((U128)limit*2u)-1u, n, &twoto64modn);
+    uint64_t twoim3r = tou64mg(((U128)limit*2u)-3u, n, &twoto64modn);
+    if (limit) {
+      uint64_t i = limit;
+      if (i > 7u+limitnext) {
+        for (; ; i-=2) {
+          factor1 = modprodu64mg(twoim1r, factor1, n, ninv, twoto64modn);
+          factor2 = modprodu64mg(twoim3r, factor2, n, ninv, twoto64modn);
+          twoim1r = modsumu64mg(twoim1r, minusfourr, n, ninv, twoto64modn);
+          if (i <= 7u+limitnext) break;
+          twoim3r = modsumu64mg(twoim3r, minusfourr, n, ninv, twoto64modn);
+        }
+        factor1 = modprodu64mg(factor1, factor2, n, ninv, twoto64modn);
+        i -= 2;
+      }
+      for (; ; i--) {
+        factor1 = modprodu64mg(twoim1r, factor1, n, ninv, twoto64modn);
+        if (i <= 1u+limitnext) break;
+        twoim1r = modsumu64mg(twoim1r, minustwor, n, ninv, twoto64modn);
+      }
+      factor1 = modpowu64mg(factor1, j, n, ninv, twoto64modn);
+      res = modprodu64mg(res, factor1, n, ninv, twoto64modn);
+    } else break;
+    twopower *= 2u;
+    limit = limitnext;
+  }
+  return fromu64mg(res, n, ninv, twoto64modn);
 }
 #else
 uint32_t modpowu64b(uint32_t a, uint64_t e, uint32_t n) {
@@ -79,9 +149,9 @@ uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *pri
   if (k >= n) return 0;
   uint32_t pix = 0;
   uint64_t res = 1;
-  uint64_t ei = 0;
-  uint64_t eiprev = 0;
   uint64_t p = 2;
+  uint64_t ei = 0; // Exponent of p in prime factorisation of k!
+  uint64_t eiprev = 0;
   uint64_t prodp = 1; // res *= prodp^eiprev mod n
   while (true) { // Process primes with common ei
     while (true) {
@@ -90,9 +160,9 @@ uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *pri
       while (true) { // Calculate ei
         uint64_t term = (k/primepower);
         ei += term;
-        primepower = (primepower*primes[pix]);
+        primepower *= primes[pix];
         if (primepower > k) break;
-      }
+      } 
       if (eiprev == 0) eiprev = ei;
       if (ei != eiprev) break;
       prodp = ((U128)prodp * p) % n;
@@ -115,18 +185,37 @@ uint64_t getkfactmodn6(uint32_t k, uint64_t n, uint32_t numprimes, uint32_t *pri
   return res;
 }
 
-uint64_t getkfactmodn1(uint64_t k, uint64_t n) {
+uint64_t getkfactmodnoddoreven(uint64_t k, uint64_t n, uint64_t (*getkfactmodn)(uint64_t, uint64_t)) {
+  // Use with any odd n only function of the right type.
+  // E.g. getkfactmodnoddoreven(k, n, &getkfactmodn25)
   if (k >= n) return 0;
-  if (n >> 32) {
-    uint64_t f = 1;
-    for (uint64_t i=2; i<=k; i++) f = ((U128)f*i) % n;
-    return f;
-  } 
-  uint32_t f = 1;
-  for (uint32_t i=2; i<=k; i++) f = ((uint64_t)f*i) % n;
-  return f;
+  if (n == 0u) return 0;
+  if (k == 0u) return 1;
+  if (n < 3u) return k;
+  uint64_t nn = n;
+  uint64_t twopower = 1u;
+  uint32_t twopoweri = 0u;
+  while (~nn & 0x1u) {
+    nn /= 2u;
+    twopower *= 2u;
+    twopoweri++;
+  }
+  if (2u*twopoweri >= k) return getkfactmodn1(k, n);
+  if (nn == 1u) return 0u;
+  uint64_t res = getkfactmodn(k, nn);
+  if (twopoweri == 0u) return res;
+  uint64_t invtwopowermodnn = 1u;
+  for (uint32_t i=0; i<twopoweri; i++) {
+    if (invtwopowermodnn & 0x1u) {
+      invtwopowermodnn = ((U128)invtwopowermodnn + nn) / 2u;
+    } else {
+      invtwopowermodnn = invtwopowermodnn / 2u;
+    }
+  }
+  res = ((U128)invtwopowermodnn*res) % nn;
+  res = ((U128)res << twopoweri) % n;
+  return res;
 }
-
 
 //===============================================================================================================================
 // kfactorialmodn.c: END
